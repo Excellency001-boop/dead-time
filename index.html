@@ -88,7 +88,7 @@
 // ════════════════════════════════════════════════════════════════════════════
 
 const P = new URLSearchParams(location.search);
-const MODEL  = P.get("model") || "llama3.2:1b";
+const MODEL  = P.get("model") || "smollm2:135m";
 const OLLAMA = P.get("host")  || "http://localhost:11434";
 // PRIMARY MODE is the real honest clock (local Ollama streaming). The simulated
 // wait only auto-enables when the page is NOT on localhost — i.e. the public demo,
@@ -446,7 +446,7 @@ async function think(text){
   try{
     res=await fetch(OLLAMA+"/api/generate",{method:"POST",
       headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({model:MODEL,prompt:text,stream:true})});
+      body:JSON.stringify({model:MODEL,prompt:text,stream:true,options:{num_predict:700}})});
   }catch(e){ streaming=false; phase="enter"; setErr("no model reachable — start ollama, or open ?demo=1");
     showRitual(true); return; }
   if(!res.ok||!res.body){ streaming=false; phase="enter"; setErr("model error "+res.status); showRitual(true); return; }
