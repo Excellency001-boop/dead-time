@@ -1,0 +1,669 @@
+<!-- DEAD TIME -->
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>DEAD TIME</title>
+<style>
+  :root { color-scheme: dark; }
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+    cursor: none; -webkit-user-select: none; user-select: none; touch-action: none; }
+  canvas { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+  #fog   { z-index: 0; }
+  #stage { z-index: 1; }
+  #grain { z-index: 2; opacity: 0.5; mix-blend-mode: overlay; pointer-events: none; }
+  #vignette { position: fixed; inset: 0; z-index: 2; pointer-events: none;
+    background: radial-gradient(ellipse at 50% 45%, rgba(0,0,0,0) 40%, rgba(0,0,0,0.34) 74%, rgba(0,0,0,0.7) 100%); }
+  /* the freeze money-shot: when time stops, the world drains cold */
+  #fog, #stage { transition: filter 1.15s ease; }
+  body.frozen #fog   { filter: saturate(0.34) brightness(0.80) contrast(1.05); }
+  body.frozen #stage { filter: saturate(0.5) brightness(0.92); }
+  #ui    { position: fixed; inset: 0; z-index: 3; pointer-events: none;
+           font-family: ui-monospace, "SF Mono", Menlo, monospace; }
+
+  /* entry ritual text — glowing, no box, no chrome */
+  #ritual { position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 2.2rem; transition: opacity 1.6s ease; }
+  #call { font-size: 12px; letter-spacing: 0.62em; text-transform: uppercase;
+    color: rgba(150,175,205,0.30); text-indent: 0.62em; }
+  #line { min-height: 1.4em; max-width: 78vw; text-align: center;
+    font-size: clamp(18px, 3.4vw, 34px); font-weight: 300; letter-spacing: 0.02em;
+    color: rgba(214,232,255,0.92); text-shadow: 0 0 22px rgba(120,175,255,0.55), 0 0 60px rgba(80,140,255,0.25); }
+  #caret { display: inline-block; width: 2px; height: 1.05em; vertical-align: -0.16em;
+    background: rgba(210,232,255,0.9); box-shadow: 0 0 12px rgba(150,200,255,0.9);
+    animation: blink 1.1s steps(1) infinite; margin-left: 2px; }
+  @keyframes blink { 50% { opacity: 0; } }
+  #sub { font-size: 11px; letter-spacing: 0.42em; text-transform: uppercase;
+    color: rgba(140,165,195,0.24); }
+
+  /* freeze / carry-out prompt */
+  #prompt { position: absolute; left: 0; right: 0; bottom: 12vh; text-align: center;
+    font-size: 11px; letter-spacing: 0.44em; text-transform: uppercase;
+    color: rgba(180,205,235,0.0); transition: color 1s ease; }
+
+  /* diagnostic readout — the honest clock, visible on purpose. toggle with i */
+  #diag { position: absolute; left: 16px; bottom: 14px; font-size: 10.5px; letter-spacing: 0.05em;
+    text-transform: uppercase; color: rgba(150,170,190,0.26); white-space: pre; transition: opacity .3s; }
+  #diag b { color: rgba(190,212,236,0.5); font-weight: 500; }
+  #diag .bar { display:inline-block; width:96px; height:3px; background:rgba(120,140,160,.10);
+    vertical-align: middle; margin: 0 6px; }
+  #diag .fill { display:block; height:100%; width:0%; background:rgba(150,196,236,.7); }
+
+  #mode { position: absolute; right: 16px; bottom: 14px; font-size: 10.5px; letter-spacing: 0.16em;
+    text-transform: uppercase; color: rgba(120,145,175,0.32); }
+  #mode.sim { color: rgba(232,180,90,0.72); }
+  #mode.err { color: rgba(232,96,96,0.75); }
+
+  /* reality shelf — the objects you carried back. each a distinct little artifact. */
+  #shelf { position: absolute; left: 0; right: 0; top: 16px; height: 46px; display: flex;
+    gap: 16px; align-items: center; justify-content: center; opacity: 0.0; transition: opacity 1s;
+    flex-wrap: nowrap; overflow: hidden; }
+  .glyph { width: 40px; height: 40px; pointer-events: auto; cursor: none; opacity: 0.8;
+    transition: transform 0.28s ease, opacity 0.28s ease; }
+  .glyph:hover { transform: scale(1.2); opacity: 1; }
+  .glyph canvas { display: block; width: 40px; height: 40px; }
+</style>
+
+<canvas id="fog"></canvas>
+<canvas id="stage"></canvas>
+<canvas id="grain"></canvas>
+<div id="vignette"></div>
+
+<div id="ui">
+  <div id="shelf"></div>
+  <div id="ritual">
+    <div id="call">dead time</div>
+    <div id="line"><span id="typed"></span><span id="caret"></span></div>
+    <div id="sub">type a thought, then release it into the dark</div>
+  </div>
+  <div id="prompt"></div>
+  <div id="diag"></div>
+  <div id="mode"></div>
+</div>
+
+<script>
+"use strict";
+// ════════════════════════════════════════════════════════════════════════════
+//  DEAD TIME
+//  A void that moves if and only if a model is thinking. In the wait you gather
+//  light into one object and carry it back into reality when the answer returns.
+//
+//  THE ONE HONEST LAW: `energy` is fed ONLY by real token arrivals (onToken()),
+//  and `voidTime` — the clock every visual and every sound reads from — advances
+//  ONLY by energy. No wall-clock drives motion. Stop the tokens, the world dies.
+// ════════════════════════════════════════════════════════════════════════════
+
+const P = new URLSearchParams(location.search);
+const MODEL   = P.get("model") || "llama3.2:1b";
+const OLLAMA  = P.get("host")  || "http://localhost:11434";
+// ?demo=1 forces a clearly-labelled SIMULATED wait. It also turns on by itself
+// when the page is not served from localhost, since a public host cannot reach
+// your local model. Run on localhost (or add ?live=1) to get the real honest clock.
+const _local  = location.hostname==="localhost" || location.hostname==="127.0.0.1";
+const DEMO    = P.has("demo") ? true : P.has("live") ? false : !_local;
+
+// ── tuning ──
+const ENERGY_PER_TOKEN = 0.15;
+const ENERGY_MAX       = 1.35;
+const DECAY_PER_FRAME  = 0.912;
+const MAX_FILAMENTS    = 230;
+
+// ── the honest state ──
+let energy = 0;            // fed only by onToken()
+let voidTime = 0;          // advances only by energy. the clock.
+let lastTokenAt = -1e9;
+let tokenCount = 0;
+let streaming = false;
+let phase = "enter";       // enter -> thinking -> frozen -> (carry) -> enter
+let promptText = "";
+let startedMs = 0;
+let modeNote = "", modeClass = "";
+let diagOn = true;
+
+// ── seeded rng so a carried object can be reborn from the shelf ──
+function mulberry32(a){ return function(){ a|=0; a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a);
+  t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
+let seed = 0, rng = Math.random;
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CANVASES
+// ════════════════════════════════════════════════════════════════════════════
+const fogCv = document.getElementById("fog");
+const stage = document.getElementById("stage");
+const sctx  = stage.getContext("2d");
+const grainCv = document.getElementById("grain");
+const gctx = grainCv.getContext("2d");
+let W=0,H=0,DPR=1, CX=0, CY=0;
+function resize(){
+  DPR = Math.min(window.devicePixelRatio||1, 2);
+  W = Math.floor(innerWidth*DPR); H = Math.floor(innerHeight*DPR);
+  fogCv.width=W; fogCv.height=H; stage.width=W; stage.height=H;
+  grainCv.width=W; grainCv.height=H;
+  CX=W/2; CY=H/2;
+  if(gl){ gl.viewport(0,0,W,H); }
+}
+addEventListener("resize", resize);
+
+// ════════════════════════════════════════════════════════════════════════════
+//  WEBGL VOLUMETRIC FOG  (internal time = voidTime, so it freezes with energy)
+// ════════════════════════════════════════════════════════════════════════════
+let gl=null, prog=null, uni={};
+const VERT = `attribute vec2 p; void main(){ gl_Position=vec4(p,0.,1.); }`;
+const FRAG = `precision highp float;
+uniform vec2 uRes; uniform float uVT; uniform float uE;
+float hash(vec2 p){ p=fract(p*vec2(123.34,345.45)); p+=dot(p,p+34.345); return fract(p.x*p.y); }
+float noise(vec2 p){ vec2 i=floor(p), f=fract(p); vec2 u=f*f*(3.-2.*f);
+  float a=hash(i), b=hash(i+vec2(1,0)), c=hash(i+vec2(0,1)), d=hash(i+vec2(1,1));
+  return mix(mix(a,b,u.x),mix(c,d,u.x),u.y); }
+float fbm(vec2 p){ float s=0., a=0.5; for(int i=0;i<6;i++){ s+=a*noise(p); p*=2.02; a*=0.5; } return s; }
+void main(){
+  vec2 uv=(gl_FragCoord.xy-0.5*uRes)/uRes.y;
+  float t=uVT*0.06;
+  // domain-warped fbm -> slow volumetric churn
+  vec2 q=vec2(fbm(uv*1.6+vec2(0.0,t)), fbm(uv*1.6+vec2(5.2,-t)));
+  vec2 r=vec2(fbm(uv*1.6+3.0*q+vec2(1.7,9.2)+t*0.5), fbm(uv*1.6+3.0*q+vec2(8.3,2.8)-t*0.5));
+  float f=fbm(uv*1.9+3.4*r);
+  float d=smoothstep(0.25,1.15,f);
+  // radial breathing pull toward centre + energy gate
+  float rad=length(uv);
+  float core=exp(-rad*rad*2.6)*(0.20+0.85*uE);
+  // fog stays a DARK volumetric haze. the filaments are the light, not this.
+  float dens=(d*0.28+core*0.55) * (0.025+0.9*uE);
+  vec3 cold=vec3(0.035,0.065,0.12);
+  vec3 hot =vec3(0.24,0.40,0.72);
+  vec3 col=mix(cold,hot, clamp(core*1.05+uE*0.3,0.,1.)) * dens;
+  col += hot*core*0.45*uE;
+  float vig=smoothstep(1.35,0.18,rad);
+  col*=vig;
+  col = col/(col+1.9);                        // heavy rolloff -> keeps the void dark
+  gl_FragColor=vec4(col,1.0);
+}`;
+function compile(type,src){ const s=gl.createShader(type); gl.shaderSource(s,src); gl.compileShader(s);
+  if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)) console.warn(gl.getShaderInfoLog(s)); return s; }
+function initGL(){
+  gl = fogCv.getContext("webgl", {antialias:false, alpha:false, premultipliedAlpha:false});
+  if(!gl){ return false; }
+  prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER,VERT));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER,FRAG));
+  gl.linkProgram(prog); gl.useProgram(prog);
+  const buf=gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+  gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1, 3,-1, -1,3]),gl.STATIC_DRAW);
+  const loc=gl.getAttribLocation(prog,"p"); gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+  uni.res=gl.getUniformLocation(prog,"uRes");
+  uni.vt =gl.getUniformLocation(prog,"uVT");
+  uni.e  =gl.getUniformLocation(prog,"uE");
+  return true;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  GHOSTS — distant other waiters. they drift on WALL time, never freeze.
+//  when your world stops, they dim but keep moving: the network never sleeps.
+// ════════════════════════════════════════════════════════════════════════════
+let ghosts=[];
+for(let i=0;i<38;i++) ghosts.push({
+  bx:Math.random(), by:Math.random(), ph:Math.random()*6.283, depth:Math.random(),
+  sp:0.15+Math.random()*0.4, hue:248+Math.random()*34 });
+ghosts.sort((a,b)=>a.depth-b.depth);               // far -> near so near ones paint on top
+function drawGhosts(){
+  const wt=performance.now()/1000;                 // wall time, not voidTime
+  const dim = phase==="thinking" ? 1 : 0.55;
+  sctx.globalCompositeOperation="lighter";
+  for(const g of ghosts){
+    const dep=g.depth;                             // 0 = distant/tiny/faint, 1 = near/large/bright
+    const drift=0.008+0.022*dep;
+    const x=(g.bx+drift*Math.sin(wt*g.sp+g.ph))*W;
+    const y=(g.by+drift*Math.cos(wt*g.sp*0.8+g.ph))*H;
+    const br=0.5+0.5*Math.sin(wt*g.sp*1.6+g.ph);
+    const a=(0.028+0.05*dep+0.055*br*dep)*dim, rr=DPR*(1.4+3.4*dep+1.1*br*dep);
+    const gr=sctx.createRadialGradient(x,y,0,x,y,rr*3.2);
+    gr.addColorStop(0,`hsla(${g.hue},68%,74%,${a})`);
+    gr.addColorStop(1,`hsla(${g.hue},68%,60%,0)`);
+    sctx.fillStyle=gr; sctx.fillRect(x-rr*3.2,y-rr*3.2,rr*6.4,rr*6.4);
+  }
+  sctx.globalCompositeOperation="source-over";
+}
+
+// ── film grain: reseeded only while time moves; FREEZES when frozen ──
+const nz=document.createElement("canvas"); nz.width=180; nz.height=101;
+const nzx=nz.getContext("2d");
+function drawGrain(){
+  if(phase!=="frozen"){
+    const img=nzx.createImageData(nz.width,nz.height), d=img.data;
+    for(let i=0;i<d.length;i+=4){ const v=Math.random()*255; d[i]=d[i+1]=d[i+2]=v; d[i+3]=255; }
+    nzx.putImageData(img,0,0);
+  }
+  gctx.clearRect(0,0,W,H);
+  gctx.imageSmoothingEnabled=false;
+  gctx.globalAlpha=0.05+0.05*energy;
+  gctx.drawImage(nz,0,0,W,H);
+  gctx.globalAlpha=1;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  THE OBJECT — luminous filaments gathered from the wait
+// ════════════════════════════════════════════════════════════════════════════
+let filaments=[];
+let gather={x:0,y:0,active:false,str:0};   // pointer becomes an attractor
+let object=null;                            // frozen, carried descriptor lives on shelf
+let ignite=0, shock=0, carryT=0, viewingRelic=false;
+let links=[];                               // crystalline lattice, built when the object freezes
+const carryTarget={x:0,y:0};
+
+function spawnFilament(){
+  if(filaments.length>=MAX_FILAMENTS){ // recycle oldest to keep density, not count
+    filaments.shift();
+  }
+  const ang=rng()*Math.PI*2;
+  const rad=(0.02+rng()*0.16)*Math.min(W,H);
+  filaments.push({
+    x: CX+Math.cos(ang)*rad, y: CY+Math.sin(ang)*rad,
+    seed: rng()*1000, phase: rng()*Math.PI*2, dir: rng()*6.2832,
+    curl: 0.6+rng()*1.4, len: (0.02+rng()*0.05)*Math.min(W,H),
+    hue: 200+rng()*40, born: voidTime,
+  });
+}
+
+function updateFilaments(dvt){
+  const pull = gather.active ? 0.06+0.14*gather.str : 0.012;
+  for(const f of filaments){
+    // curl drift on voidTime (freezes when energy 0)
+    const n = f.seed + voidTime*0.35;
+    f.x += Math.cos(n*f.curl)*dvt*14;
+    f.y += Math.sin(n*f.curl*1.3)*dvt*14;
+    // ease toward gather point (the user shaping where light collects)
+    const gx = gather.active ? gather.x : CX;
+    const gy = gather.active ? gather.y : CY;
+    f.x += (gx - f.x)*pull*(dvt*60);
+    f.y += (gy - f.y)*pull*(dvt*60);
+  }
+}
+
+function drawFilaments(){
+  sctx.globalCompositeOperation = "lighter";
+  const alive = phase==="thinking";
+  for(const f of filaments){
+    const a = alive ? Math.min(1, energy*0.9) : 0.85;   // locked bright when frozen
+    if(a<=0.01) continue;
+    const steps=7, dx=Math.cos(f.dir), dy=Math.sin(f.dir);
+    sctx.beginPath();
+    for(let i=0;i<=steps;i++){
+      const tt=i/steps;
+      const ph=f.phase+voidTime*0.6;
+      const cx=f.x + dx*tt*f.len + Math.cos(ph+tt*4.0)*f.len*tt*0.4;   // tail streams along its own direction
+      const cy=f.y + dy*tt*f.len + Math.sin(ph+tt*4.0)*f.len*tt*0.4;
+      if(i===0) sctx.moveTo(cx,cy); else sctx.lineTo(cx,cy);
+    }
+    sctx.strokeStyle=`hsla(${f.hue},85%,${62+18*a}%,${0.16*a})`;
+    sctx.lineWidth=DPR*2.6; sctx.stroke();
+    // bloom halo (soft, wide) then the bright core mote
+    const halo=sctx.createRadialGradient(f.x,f.y,0,f.x,f.y,DPR*24);
+    halo.addColorStop(0,`hsla(${f.hue},90%,78%,${0.20*a})`);
+    halo.addColorStop(1,`hsla(${f.hue},90%,68%,0)`);
+    sctx.fillStyle=halo; sctx.fillRect(f.x-DPR*24,f.y-DPR*24,DPR*48,DPR*48);
+    const g=sctx.createRadialGradient(f.x,f.y,0,f.x,f.y,DPR*7);
+    g.addColorStop(0,`hsla(${f.hue},95%,92%,${0.95*a})`);
+    g.addColorStop(1,`hsla(${f.hue},90%,70%,0)`);
+    sctx.fillStyle=g; sctx.fillRect(f.x-DPR*7,f.y-DPR*7,DPR*14,DPR*14);
+  }
+  sctx.globalCompositeOperation="source-over";
+}
+
+// when the object freezes it crystallises: link each mote to its nearest neighbour
+function buildLinks(){
+  links=[]; const n=filaments.length, maxD=Math.pow(Math.min(W,H)*0.085,2);
+  for(let i=0;i<n;i++){
+    let b=-1,best=1e18;
+    for(let j=i+1;j<n;j++){
+      const dx=filaments[i].x-filaments[j].x, dy=filaments[i].y-filaments[j].y, d=dx*dx+dy*dy;
+      if(d<best){ best=d; b=j; }
+    }
+    if(b>=0 && best<maxD) links.push([i,b]);
+  }
+}
+function drawLinks(){
+  if(!links.length) return;
+  sctx.globalCompositeOperation="lighter"; sctx.lineWidth=DPR*0.9;
+  for(const [a,b] of links){ const f=filaments[a], g=filaments[b]; if(!f||!g) continue;
+    sctx.strokeStyle=`hsla(${f.hue},80%,74%,0.12)`;
+    sctx.beginPath(); sctx.moveTo(f.x,f.y); sctx.lineTo(g.x,g.y); sctx.stroke(); }
+  sctx.globalCompositeOperation="source-over";
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  SOUND — one drone modulated only by energy, grains on tokens, chime on freeze
+// ════════════════════════════════════════════════════════════════════════════
+let ac=null, master=null, lp=null, drone=null, sub=null, padGain=null, gatherGain=null, lastGrain=0;
+function initAudio(){
+  if(ac) return;
+  ac=new (window.AudioContext||window.webkitAudioContext)();
+  master=ac.createGain(); master.gain.value=0;
+  lp=ac.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=170; lp.Q.value=7;
+  drone=ac.createOscillator(); drone.type="sine"; drone.frequency.value=55;
+  sub=ac.createOscillator(); sub.type="sine"; sub.frequency.value=27.5;
+  const sg=ac.createGain(); sg.gain.value=0.5;
+  drone.connect(lp); sub.connect(sg); sg.connect(lp);
+  // detuned saw "thinking pad" — its presence is the sound of the machine working
+  const pad=ac.createOscillator(), pad2=ac.createOscillator();
+  pad.type="sawtooth"; pad.frequency.value=110; pad2.type="sawtooth"; pad2.frequency.value=110.6;
+  padGain=ac.createGain(); padGain.gain.value=0;
+  pad.connect(padGain); pad2.connect(padGain); padGain.connect(lp);
+  // gather tone — a soft shimmer while you pull light together
+  const gth=ac.createOscillator(); gth.type="sine"; gth.frequency.value=330;
+  gatherGain=ac.createGain(); gatherGain.gain.value=0;
+  const gbp=ac.createBiquadFilter(); gbp.type="bandpass"; gbp.frequency.value=700; gbp.Q.value=2;
+  gth.connect(gatherGain); gatherGain.connect(gbp); gbp.connect(master);
+  lp.connect(master); master.connect(ac.destination);
+  drone.start(); sub.start(); pad.start(); pad2.start(); gth.start();
+}
+function igniteSwell(){
+  if(!ac) return; const now=ac.currentTime;
+  const o=ac.createOscillator(), g=ac.createGain();
+  o.type="sine"; o.frequency.setValueAtTime(70,now); o.frequency.exponentialRampToValueAtTime(300,now+0.45);
+  g.gain.setValueAtTime(0,now); g.gain.linearRampToValueAtTime(0.10,now+0.06);
+  g.gain.exponentialRampToValueAtTime(0.0001,now+0.8);
+  o.connect(g); g.connect(ac.destination); o.start(now); o.stop(now+0.85);
+}
+function grain(){
+  if(!ac) return; const now=ac.currentTime; if(now-lastGrain<0.045) return; lastGrain=now;
+  const o=ac.createOscillator(), g=ac.createGain(), pan=ac.createStereoPanner?ac.createStereoPanner():null;
+  o.type="triangle"; o.frequency.value=520+Math.random()*900*(0.4+energy);
+  g.gain.value=0; g.gain.setValueAtTime(0,now);
+  g.gain.linearRampToValueAtTime(0.05*energy,now+0.006);
+  g.gain.exponentialRampToValueAtTime(0.0001,now+0.16);
+  o.connect(g); if(pan){pan.pan.value=Math.random()*2-1; g.connect(pan); pan.connect(master);} else g.connect(master);
+  o.start(now); o.stop(now+0.18);
+}
+function chime(){
+  if(!ac) return; const now=ac.currentTime;
+  [1,1.5,2.01,2.67,3.98].forEach((m,i)=>{
+    const o=ac.createOscillator(), g=ac.createGain();
+    o.type="sine"; o.frequency.value=110*m;
+    g.gain.setValueAtTime(0,now); g.gain.linearRampToValueAtTime(0.09/(i+1),now+0.02+i*0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001,now+2.6+i*0.2);
+    o.connect(g); g.connect(master.context.destination); o.start(now); o.stop(now+3);
+  });
+}
+function carrySound(){
+  if(!ac) return; const now=ac.currentTime;
+  const o=ac.createOscillator(), g=ac.createGain();
+  o.type="sine"; o.frequency.setValueAtTime(120,now); o.frequency.exponentialRampToValueAtTime(720,now+0.5);
+  g.gain.setValueAtTime(0.0,now); g.gain.linearRampToValueAtTime(0.14,now+0.05);
+  g.gain.exponentialRampToValueAtTime(0.0001,now+0.7);
+  o.connect(g); g.connect(ac.destination); o.start(now); o.stop(now+0.75);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  THE STREAM — the only feeder of energy
+// ════════════════════════════════════════════════════════════════════════════
+function onToken(){
+  energy=Math.min(ENERGY_MAX, energy+ENERGY_PER_TOKEN);   // <── the coupling
+  lastTokenAt=performance.now();
+  tokenCount++;
+  if(tokenCount===1){ ignite=1; igniteSwell(); }          // the first token turns time on
+  spawnFilament();
+  grain();
+}
+
+async function think(text){
+  phase="thinking"; streaming=true; tokenCount=0; filaments=[]; object=null;
+  viewingRelic=false; ignite=0; shock=0;
+  promptText=text; startedMs=performance.now();
+  seed=(Math.random()*1e9)|0; rng=mulberry32(seed);
+  if(DEMO){ setMode("simulated wait","sim"); return simulate(); }
+  setMode(MODEL,"");
+  let res;
+  try{
+    res=await fetch(OLLAMA+"/api/generate",{method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({model:MODEL,prompt:text,stream:true})});
+  }catch(e){ streaming=false; phase="enter"; setMode("no brain reachable — add ?demo=1","err");
+    showRitual(true); return; }
+  if(!res.ok||!res.body){ streaming=false; phase="enter"; setMode("http "+res.status,"err"); showRitual(true); return; }
+  const reader=res.body.getReader(), dec=new TextDecoder(); let buf="";
+  while(true){
+    let ch; try{ ch=await reader.read(); }catch(e){ break; }
+    if(ch.done) break;
+    buf+=dec.decode(ch.value,{stream:true}); let nl;
+    while((nl=buf.indexOf("\n"))>=0){
+      const line=buf.slice(0,nl).trim(); buf=buf.slice(nl+1);
+      if(!line) continue; let o; try{o=JSON.parse(line);}catch(e){continue;}
+      if(o.response) onToken();
+      if(o.done) endStream();
+    }
+  }
+  if(streaming) endStream();
+}
+
+// clearly-labelled simulated token stream (for showing people without local Ollama)
+function simulate(){
+  const total=120+((Math.random()*220)|0); let i=0;
+  (function step(){
+    if(i>=total){ endStream(); return; }
+    const burst=1+((Math.random()*4)|0);
+    for(let b=0;b<burst && i<total;b++,i++) onToken();
+    // realistic jitter, with occasional "thinking" pauses
+    const gap = Math.random()<0.08 ? 220+Math.random()*500 : 22+Math.random()*70;
+    setTimeout(step,gap);
+  })();
+}
+
+function freezeRing(){
+  if(!ac) return; const now=ac.currentTime;
+  const o=ac.createOscillator(), g=ac.createGain();
+  o.type="sine"; o.frequency.setValueAtTime(900,now); o.frequency.exponentialRampToValueAtTime(150,now+1.5);
+  g.gain.setValueAtTime(0,now); g.gain.linearRampToValueAtTime(0.07,now+0.03);
+  g.gain.exponentialRampToValueAtTime(0.0001,now+1.7);
+  o.connect(g); g.connect(ac.destination); o.start(now); o.stop(now+1.8);
+}
+function endStream(){
+  if(!streaming) return;
+  streaming=false; phase="frozen";          // <── the freeze. nothing feeds energy now.
+  shock=1;                                   // one outward pulse as time stops
+  buildLinks();                              // the object crystallises into a lattice
+  chime(); freezeRing();
+  const p=document.getElementById("prompt");
+  p.textContent="the answer returned · pull it into reality";
+  p.style.color="rgba(180,205,235,0.55)";
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  CARRY-OUT + REALITY SHELF (localStorage — the value that survives)
+// ════════════════════════════════════════════════════════════════════════════
+const KEY="deadtime.reality.v1";
+function loadShelf(){ try{ return JSON.parse(localStorage.getItem(KEY))||[]; }catch(e){ return []; } }
+function saveShelf(a){ try{ localStorage.setItem(KEY,JSON.stringify(a.slice(-24))); }catch(e){} }
+function carryOut(){
+  if(viewingRelic){                          // dismissing a reborn relic — don't re-store it
+    phase="enter"; energy=0; filaments=[]; viewingRelic=false;
+    document.getElementById("prompt").style.color="rgba(180,205,235,0)";
+    showRitual(true); return;
+  }
+  if(phase!=="frozen") return;
+  phase="carry"; carryT=0; carrySound();     // the object rises into reality
+  carryTarget.x=CX; carryTarget.y=42*DPR;    // toward the shelf
+  document.getElementById("prompt").style.color="rgba(180,205,235,0)";
+}
+function carryUpdate(dt){
+  carryT=Math.min(1, carryT + dt/0.85);
+  const step=Math.min(1, dt*60);
+  for(const f of filaments){
+    f.x += (carryTarget.x - f.x)*0.10*step;
+    f.y += (carryTarget.y - f.y)*0.12*step;
+    f.len *= (1 - 0.045*step);
+  }
+  if(carryT>=1) commitCarry();
+}
+function commitCarry(){
+  const rec={ id:Date.now(), seed, tokens:tokenCount,
+    ms:Math.round(performance.now()-startedMs),
+    prompt:promptText.slice(0,120), hue:200+Math.round((seed%40)) };
+  const shelf=loadShelf(); shelf.push(rec); saveShelf(shelf);
+  phase="enter"; energy=0; filaments=[]; object=null;
+  document.getElementById("typed").textContent=""; promptText="";
+  renderShelf(); showRitual(true);
+}
+// each carried wait is redrawn from its seed as a small luminous constellation
+function makeGlyph(rec){
+  const s=40, c=document.createElement("canvas");
+  c.width=s*2; c.height=s*2; c.style.width=s+"px"; c.style.height=s+"px";
+  const x=c.getContext("2d"), r=mulberry32(rec.seed), cx=s, cy=s;
+  const n=Math.min(40, 7+Math.floor(rec.tokens/7));
+  const pts=[];
+  for(let i=0;i<n;i++){ const a=r()*6.2832, rad=(0.12+r()*0.82)*s*0.92; pts.push([cx+Math.cos(a)*rad, cy+Math.sin(a)*rad]); }
+  x.globalCompositeOperation="lighter";
+  x.strokeStyle=`hsla(${rec.hue},80%,72%,0.09)`; x.lineWidth=1.1;
+  for(let i=0;i<pts.length;i++){ const a=pts[i], b=pts[(i*7+3)%pts.length];
+    x.beginPath(); x.moveTo(a[0],a[1]); x.lineTo(b[0],b[1]); x.stroke(); }
+  for(const p of pts){ const g=x.createRadialGradient(p[0],p[1],0,p[0],p[1],5.5);
+    g.addColorStop(0,`hsla(${rec.hue},92%,90%,0.9)`); g.addColorStop(1,`hsla(${rec.hue},90%,70%,0)`);
+    x.fillStyle=g; x.fillRect(p[0]-5.5,p[1]-5.5,11,11); }
+  return c;
+}
+function renderShelf(){
+  const shelf=loadShelf(); const el=document.getElementById("shelf"); el.innerHTML="";
+  shelf.slice().reverse().forEach(r=>{
+    const d=document.createElement("div"); d.className="glyph";
+    d.appendChild(makeGlyph(r));
+    d.title=`"${r.prompt||"a wait"}"  ·  ${r.tokens} filaments  ·  ${(r.ms/1000).toFixed(1)}s`;
+    d.onclick=()=>rebirth(r);
+    el.appendChild(d);
+  });
+  el.style.opacity = shelf.length? "0.9":"0";
+}
+// briefly re-materialise a carried object from its seed
+function rebirth(r){
+  if(phase!=="enter") return;
+  seed=r.seed; rng=mulberry32(seed); filaments=[]; tokenCount=0;
+  for(let i=0;i<r.tokens;i++){ spawnFilament(); }
+  buildLinks();
+  phase="frozen"; energy=0.0; viewingRelic=true;
+  const p=document.getElementById("prompt");
+  p.textContent=(r.prompt||"a wait you kept")+" · "+(r.ms/1000).toFixed(1)+"s";
+  p.style.color="rgba(180,205,235,0.5)";
+  showRitual(false);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  RENDER LOOP — advances NOTHING on its own
+// ════════════════════════════════════════════════════════════════════════════
+let last=performance.now(), tks=[];
+function loop(){
+  const now=performance.now(), dt=Math.min(0.05,(now-last)/1000); last=now;
+
+  energy*=DECAY_PER_FRAME; if(energy<0.0004) energy=0;
+  const dvt=energy*dt;                 // the clock only ticks with energy
+  voidTime+=dvt;
+  if(gather.active) gather.str=Math.min(1,gather.str+dt*1.5); else gather.str*=0.94;
+  ignite*=0.92; if(ignite<0.003) ignite=0;
+  shock *=0.94; if(shock <0.003) shock =0;
+  if(phase==="thinking") updateFilaments(dvt);
+  else if(phase==="carry") carryUpdate(dt);
+
+  // fog
+  if(gl){ gl.useProgram(prog); gl.uniform2f(uni.res,W,H); gl.uniform1f(uni.vt,voidTime); gl.uniform1f(uni.e,energy);
+    gl.drawArrays(gl.TRIANGLES,0,3); }
+
+  // the freeze grade follows the phase
+  document.body.classList.toggle("frozen", phase==="frozen");
+
+  // stage
+  sctx.clearRect(0,0,W,H);
+  drawGhosts();
+  if((phase==="frozen"||phase==="carry") && filaments.length) drawLinks();
+  if(filaments.length) drawFilaments();
+  // ignition flash — a real token turned time on
+  if(ignite>0.003){
+    sctx.globalCompositeOperation="lighter";
+    const rr=Math.min(W,H)*(0.16+0.5*ignite);
+    const g=sctx.createRadialGradient(CX,CY,0,CX,CY,rr);
+    g.addColorStop(0,`rgba(206,228,255,${0.55*ignite})`); g.addColorStop(1,"rgba(206,228,255,0)");
+    sctx.fillStyle=g; sctx.fillRect(CX-rr,CY-rr,rr*2,rr*2);
+    sctx.globalCompositeOperation="source-over";
+  }
+  // freeze shockwave — one ring outward as the world stops
+  if(shock>0.003){
+    sctx.globalCompositeOperation="lighter";
+    const rr=Math.min(W,H)*(0.08+0.72*(1-shock));
+    sctx.beginPath(); sctx.arc(CX,CY,rr,0,6.2832);
+    sctx.strokeStyle=`rgba(176,206,255,${0.42*shock})`; sctx.lineWidth=DPR*(1.5+7*shock); sctx.stroke();
+    sctx.globalCompositeOperation="source-over";
+  }
+  // pointer sigil (our only cursor — a mote of you) + contracting pull-ring while gathering
+  if(phase!=="enter"){
+    sctx.globalCompositeOperation="lighter";
+    const rr=DPR*(14+9*gather.str);
+    const g=sctx.createRadialGradient(gather.x,gather.y,0,gather.x,gather.y,rr);
+    g.addColorStop(0,`rgba(206,228,255,${0.20+0.30*gather.str})`); g.addColorStop(1,"rgba(206,228,255,0)");
+    sctx.fillStyle=g; sctx.fillRect(gather.x-rr,gather.y-rr,rr*2,rr*2);
+    if(gather.str>0.03){
+      const ring=DPR*(48-32*gather.str);           // ring contracts inward = the pull
+      sctx.beginPath(); sctx.arc(gather.x,gather.y,ring,0,6.2832);
+      sctx.strokeStyle=`rgba(184,212,255,${0.28*gather.str})`; sctx.lineWidth=DPR*1.4; sctx.stroke();
+    }
+    sctx.globalCompositeOperation="source-over";
+  }
+
+  // audio follows the same energy
+  if(ac){ const t=ac.currentTime;
+    master.gain.setTargetAtTime(Math.min(0.30,energy*0.27),t,0.05);
+    lp.frequency.setTargetAtTime(150+energy*1500,t,0.04);
+    drone.frequency.setTargetAtTime(52+energy*10,t,0.08);
+    padGain.gain.setTargetAtTime(Math.min(0.09,energy*0.08),t,0.1);
+    gatherGain.gain.setTargetAtTime((gather.active&&phase==="thinking")?0.035*gather.str:0,t,0.08);
+  }
+  drawGrain();
+
+  // diagnostic
+  while(tks.length && now-tks[0]>1000) tks.shift();
+  if(diagOn){
+    let st = phase==="thinking" ? (energy>0.02?"alive":"waiting")
+           : phase==="frozen" ? "frozen" : "still";
+    document.getElementById("diag").innerHTML =
+      `state <b>${st}</b>   tokens <b>${tokenCount}</b>   tok/s <b>${tks.length}</b>`+
+      `   energy<span class="bar"><span class="fill" style="width:${Math.round(Math.min(1,energy/ENERGY_MAX)*100)}%"></span></span><b>${energy.toFixed(3)}</b>`;
+  }
+  requestAnimationFrame(loop);
+}
+const _ot=onToken; onToken=function(){ _ot(); tks.push(performance.now()); };
+
+// ════════════════════════════════════════════════════════════════════════════
+//  ENTRY RITUAL + INPUT
+// ════════════════════════════════════════════════════════════════════════════
+const ritual=document.getElementById("ritual"), typedEl=document.getElementById("typed");
+function showRitual(v){ ritual.style.opacity=v?"1":"0"; ritual.style.pointerEvents="none"; }
+function setMode(txt,cls){ modeNote=txt; const m=document.getElementById("mode");
+  m.textContent=txt; m.className=cls||""; }
+
+let armed=false;
+function arm(){ if(armed) return; armed=true; initAudio(); if(ac.state==="suspended") ac.resume(); }
+
+addEventListener("keydown",e=>{
+  if(e.key==="`"){ diagOn=!diagOn; document.getElementById("diag").style.opacity=diagOn?"1":"0"; return; }
+  if(phase==="enter"){
+    arm();
+    if(e.key==="Enter"){ const t=(promptText.trim()|| "describe the dark that is thinking right now"); showRitual(false); think(t); }
+    else if(e.key==="Backspace"){ promptText=promptText.slice(0,-1); typedEl.textContent=promptText; }
+    else if(e.key.length===1){ promptText+=e.key; typedEl.textContent=promptText; }
+  } else if(phase==="frozen"){
+    if(e.key==="Enter"||e.key===" "){ e.preventDefault(); carryOut(); }
+    if(e.key==="Escape"){ phase="enter"; document.getElementById("prompt").style.color="rgba(0,0,0,0)"; showRitual(true); }
+  }
+});
+
+// pointer = gather attractor; click in frozen = carry out
+function setGather(x,y){ gather.x=x*DPR; gather.y=y*DPR; }
+addEventListener("pointermove",e=>setGather(e.clientX,e.clientY));
+addEventListener("pointerdown",e=>{ arm(); setGather(e.clientX,e.clientY);
+  if(phase==="frozen"){ carryOut(); } else { gather.active=true; } });
+addEventListener("pointerup",()=>{ gather.active=false; });
+
+// ════════════════════════════════════════════════════════════════════════════
+//  BOOT
+// ════════════════════════════════════════════════════════════════════════════
+resize();
+if(!initGL()) setMode("no webgl","err");
+if(DEMO) setMode("demo — simulated wait","sim");
+renderShelf();
+gather.x=CX; gather.y=CY;
+requestAnimationFrame(loop);
+</script>

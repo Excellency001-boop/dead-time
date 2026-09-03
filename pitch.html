@@ -1,0 +1,354 @@
+<meta charset="utf-8" />
+<title>Dead Time</title>
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<style>
+  :root{
+    --void:#070707; --panel:#0c0d0f; --panel-2:#101113;
+    --ink:#d2d4d0; --dim:#767a80; --faint:#474b52;
+    --signal:#e0493d;           /* the one alert colour. used rarely. */
+    --rule:rgba(150,156,166,0.15); --rule-2:rgba(150,156,166,0.28);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --serif:Georgia,"Times New Roman",ui-serif,serif;
+  }
+  /* an instrument, not a landing page. cold, left-aligned, machine-voiced. */
+  *{box-sizing:border-box}
+  html{-webkit-text-size-adjust:100%}
+  body{margin:0;background:var(--void);color:var(--ink);
+    font-family:var(--mono);font-size:14px;line-height:1.65;letter-spacing:0.01em;
+    -webkit-font-smoothing:antialiased}
+  ::selection{background:var(--signal);color:#fff}
+  a{color:var(--ink);text-decoration:underline;text-underline-offset:3px;text-decoration-color:var(--faint)}
+  a:hover{text-decoration-color:var(--signal)}
+  :focus-visible{outline:1px solid var(--signal);outline-offset:3px}
+
+  .plate{max-width:940px;margin:0 auto;padding:0 22px}
+  .mono{font-family:var(--mono)}
+  .lbl{font-family:var(--mono);font-size:11px;letter-spacing:0.2em;text-transform:uppercase;color:var(--dim)}
+  .sig{color:var(--signal)}
+
+  /* ---- masthead : device faceplate ---- */
+  .plate-head{display:flex;justify-content:space-between;align-items:baseline;gap:16px;
+    padding:16px 0 14px;border-bottom:1px solid var(--rule-2);flex-wrap:wrap}
+  .plate-head .id{font-size:13px;letter-spacing:0.32em;color:var(--ink);font-weight:400}
+  .plate-head .meta{font-size:10.5px;letter-spacing:0.18em;text-transform:uppercase;color:var(--faint);text-align:right}
+
+  /* ---- scope : the framed void ---- */
+  .scope{position:relative;margin:22px 0 0;border:1px solid var(--rule-2);
+    height:clamp(360px,60vh,560px);background:#040405;overflow:hidden;cursor:pointer;
+    user-select:none;touch-action:manipulation}
+  #void{position:absolute;inset:0;width:100%;height:100%;display:block}
+  .scope-top{position:absolute;top:0;left:0;right:0;display:flex;justify-content:space-between;
+    padding:9px 12px;font-size:10.5px;letter-spacing:0.18em;text-transform:uppercase;
+    color:var(--dim);pointer-events:none;z-index:2;
+    background:linear-gradient(180deg,rgba(4,4,5,0.85),rgba(4,4,5,0))}
+  .scope-top .live{display:inline-flex;gap:8px;align-items:center}
+  .dot{width:6px;height:6px;border-radius:50%;background:var(--faint)}
+  .dot.on{background:var(--signal);box-shadow:0 0 8px var(--signal)}
+  .scope-mid{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
+    pointer-events:none;z-index:2}
+  .scope-mid span{font-size:11px;letter-spacing:0.34em;text-transform:uppercase;color:var(--dim);
+    padding:8px 16px;border:1px solid var(--rule);background:rgba(4,4,5,0.35)}
+  .scope-mid b{color:var(--ink);font-weight:400}
+  .scope-read{position:absolute;left:0;right:0;bottom:0;display:flex;gap:22px;
+    padding:9px 12px;font-size:10.5px;letter-spacing:0.12em;text-transform:uppercase;
+    color:var(--faint);pointer-events:none;z-index:2;
+    background:linear-gradient(0deg,rgba(4,4,5,0.9),rgba(4,4,5,0))}
+  .scope-read b{color:var(--dim);font-weight:400;font-variant-numeric:tabular-nums}
+  #ebar{display:inline-block;width:96px;height:3px;background:rgba(150,156,166,0.16);
+    position:relative;vertical-align:middle;overflow:hidden}
+  #efill{position:absolute;inset:0 100% 0 0;background:#9fc6ff}
+  .tick{position:absolute;width:10px;height:10px;z-index:3;pointer-events:none;border:0 solid var(--rule-2)}
+  .tick.tl{top:-1px;left:-1px;border-top-width:1px;border-left-width:1px}
+  .tick.tr{top:-1px;right:-1px;border-top-width:1px;border-right-width:1px}
+  .tick.bl{bottom:-1px;left:-1px;border-bottom-width:1px;border-left-width:1px}
+  .tick.br{bottom:-1px;right:-1px;border-bottom-width:1px;border-right-width:1px}
+
+  /* ---- thesis : the serif human voice ---- */
+  .thesis{font-family:var(--serif);font-weight:400;color:#e7e8e4;
+    font-size:clamp(30px,6.2vw,62px);line-height:1.04;letter-spacing:-0.01em;
+    max-width:16ch;margin:40px 0 8px}
+  .thesis .q{color:var(--dim)}
+  .thesis-sub{max-width:56ch;color:var(--dim);font-size:14px;margin:20px 0 4px}
+  .thesis-sub b{color:var(--ink);font-weight:400}
+
+  /* ---- sections : log entries with gutter codes ---- */
+  section{display:grid;grid-template-columns:96px 1fr;gap:26px;
+    padding:44px 0;border-top:1px solid var(--rule)}
+  .gut{font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:var(--faint);
+    line-height:1.7}
+  .gut .num{color:var(--dim)}
+  .body{min-width:0}
+  h2{margin:0 0 18px;font-family:var(--mono);font-weight:400;font-size:13px;
+    letter-spacing:0.26em;text-transform:uppercase;color:var(--ink)}
+  .say{font-family:var(--serif);font-weight:400;color:#e7e8e4;
+    font-size:clamp(20px,3vw,29px);line-height:1.25;letter-spacing:-0.005em;
+    max-width:24ch;margin:0 0 22px}
+  p{margin:0 0 15px;max-width:66ch;color:var(--dim);font-size:13.5px;line-height:1.7}
+  p b{color:var(--ink);font-weight:400}
+  code{font-family:var(--mono);color:var(--ink);background:var(--panel-2);
+    padding:1px 5px;border:1px solid var(--rule);font-size:12.5px}
+
+  .spec{border:1px solid var(--rule-2);background:var(--panel);padding:18px 20px;margin:6px 0 4px;
+    font-size:13px;line-height:1.9;color:var(--dim);overflow-x:auto;white-space:pre}
+  .spec .op{color:var(--ink)}
+  .spec .hot{color:#9fc6ff}
+  .spec .cm{color:var(--faint)}
+  .spec .rule-line{color:var(--ink);font-weight:400}
+
+  /* loop timeline */
+  .loop{width:100%;border-collapse:collapse;font-size:13px}
+  .loop td{border-top:1px solid var(--rule);padding:13px 10px 13px 0;vertical-align:top;color:var(--dim)}
+  .loop tr:first-child td{border-top:none}
+  .loop .t{width:34px;color:var(--faint);font-variant-numeric:tabular-nums}
+  .loop .ev{width:96px;color:var(--ink);letter-spacing:0.06em;text-transform:uppercase;font-size:12px}
+  .loop tr.freeze .ev{color:var(--signal)}
+  .loop tr.freeze .t{color:var(--signal)}
+
+  /* value spec table */
+  .vtab{width:100%;border-collapse:collapse;font-size:13px}
+  .vtab td{border-top:1px solid var(--rule);padding:14px 10px 14px 0;vertical-align:top;color:var(--dim)}
+  .vtab tr:first-child td{border-top:none}
+  .vtab .lhs{width:190px;color:var(--ink);text-transform:uppercase;letter-spacing:0.08em;font-size:11.5px;line-height:1.5}
+  .vtab .lhs .arw{color:var(--faint)}
+
+  /* honesty two-up */
+  .duo{display:grid;grid-template-columns:1fr 1fr;gap:22px}
+  .col h3{margin:0 0 12px;font-size:11px;letter-spacing:0.18em;text-transform:uppercase}
+  .col.real h3{color:var(--ink)}
+  .col.not h3{color:var(--signal)}
+  .col ul{margin:0;padding:0;list-style:none}
+  .col li{padding:9px 0;border-top:1px solid var(--rule);color:var(--dim);font-size:12.5px;line-height:1.55}
+  .col li:first-child{border-top:none}
+  .col li b{color:var(--ink);font-weight:400}
+
+  .cmd{border:1px solid var(--rule-2);background:#040405;padding:13px 16px;margin:8px 0;
+    font-size:13px;color:var(--ink);overflow-x:auto;white-space:pre}
+  .cmd .p{color:var(--signal);user-select:none}
+  .runcap{font-size:12px;color:var(--faint);margin:2px 0 14px}
+
+  .plate-foot{display:flex;justify-content:space-between;align-items:baseline;gap:14px;
+    padding:22px 0 40px;border-top:1px solid var(--rule-2);flex-wrap:wrap;margin-top:20px}
+  .plate-foot .closer{font-family:var(--serif);font-size:16px;color:var(--dim);max-width:40ch}
+  .plate-foot .stamp{font-size:10.5px;letter-spacing:0.16em;text-transform:uppercase;color:var(--faint);text-align:right;line-height:1.9}
+
+  @media(max-width:640px){
+    section{grid-template-columns:1fr;gap:12px;padding:36px 0}
+    .duo{grid-template-columns:1fr}
+    .vtab .lhs{width:130px}
+    .plate-head .meta{text-align:left}
+  }
+  @media(prefers-reduced-motion:reduce){ .dot.on{box-shadow:none} }
+</style>
+
+<div class="plate">
+  <div class="plate-head">
+    <div class="id">DEAD&nbsp;TIME</div>
+    <div class="meta">Inference Instrument · Solo Build<br>Commonsmade · Make Waiting for AI Fun</div>
+  </div>
+
+  <div class="scope" id="scope">
+    <canvas id="void"></canvas>
+    <span class="tick tl"></span><span class="tick tr"></span><span class="tick bl"></span><span class="tick br"></span>
+    <div class="scope-top">
+      <span>VOID · VIEWPORT 01</span>
+      <span class="live"><span class="dot" id="livedot"></span><span id="livetxt">idle</span></span>
+    </div>
+    <div class="scope-mid"><span id="scopehint">hold to drive &middot; <b>release</b> to freeze</span></div>
+    <div class="scope-read">
+      <span>state <b id="stateword">still</b></span>
+      <span>energy <span id="ebar"><span id="efill"></span></span> <b id="eval">0.00</b></span>
+      <span>clock <b id="clk">held</b></span>
+    </div>
+  </div>
+
+  <div class="thesis">A void that only moves while an AI is thinking.<span class="q"></span></div>
+  <div class="thesis-sub">You type a thought and release it into the dark. Time turns on only while the model streams. You gather the wait into one object. When the answer lands, the world freezes and you keep the object. <b>Wait. Make. Keep.</b></div>
+
+  <section>
+    <div class="gut"><span class="num">§01</span><br>The law</div>
+    <div class="body">
+      <h2>The clock is real, not a timer</h2>
+      <p class="say">The world moves if and only if real tokens are arriving.</p>
+      <p>There is one value, <code>energy</code>. Exactly one thing raises it: a real token streamed from a real model. Every frame it only ever drains. The clock that drives every shader and every sound reads from it. Stop the model and the universe stops with it.</p>
+      <div class="spec"><span class="cm"># energy model — the whole honesty, in four lines</span>
+on each real token   energy <span class="op">+=</span> 0.15        <span class="cm">// capped at 1.35</span>
+every frame, always  energy <span class="op">*=</span> 0.912       <span class="cm">// no tokens -> decays to 0</span>
+void clock advances  <span class="op">only while</span> energy <span class="op">&gt;</span> 0
+<span class="rule-line">therefore            motion  ⟺  tokens arriving</span></div>
+      <p>No idle loop. No fake breathing. No timer faking the middle. A judge who realises "this only moves while my model is thinking" is a judge who remembers Dead Time.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="gut"><span class="num">§02</span><br>The loop</div>
+    <div class="body">
+      <h2>Five beats, one wait</h2>
+      <table class="loop">
+        <tr><td class="t">01</td><td class="ev">Enter</td><td>Pure black. Type a thought. Your letters appear as light. Release it into the dark.</td></tr>
+        <tr><td class="t">02</td><td class="ev">Ignite</td><td>The first real token lands. The void flares. Time turns on, and you hear it turn on.</td></tr>
+        <tr><td class="t">03</td><td class="ev">Gather</td><td>Filaments drift out of the fog. You hold and pull them into one object. It grows with every token.</td></tr>
+        <tr class="freeze"><td class="t">04</td><td class="ev">Freeze</td><td>The answer returns. A shockwave rings out, the fog drains cold, your light locks into a crystal. Silence.</td></tr>
+        <tr><td class="t">05</td><td class="ev">Carry</td><td>One gesture pulls the crystal out of the void into reality. It joins your shelf of kept waits.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="gut"><span class="num">§03</span><br>The thesis</div>
+    <div class="body">
+      <h2>Waiting becomes value</h2>
+      <p class="say">A working demonstration of the Commons idea, felt from the inside.</p>
+      <table class="vtab">
+        <tr><td class="lhs">Attention <span class="arw">→</span> substance</td><td>Your wait is the raw material. The longer and denser the inference, the richer the object you can make.</td></tr>
+        <tr><td class="lhs">Compute <span class="arw">→</span> held object</td><td>The object is a receipt of real inference, minted from the tokens the machine produced. How long you waited is baked into its shape and seed.</td></tr>
+        <tr><td class="lhs">Value <span class="arw">→</span> persistent</td><td>Carry an object out and it survives across sessions on your reality shelf. The wait produced a thing, and the thing is yours. The seed of Build2Earn.</td></tr>
+        <tr><td class="lhs">Rail <span class="arw">→</span> x402 / USDC</td><td>Each object is a discrete, ownable artifact tied to one real compute event. Exactly the shape you settle or account for in compute credits.</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <div class="gut"><span class="num">§04</span><br>Honesty</div>
+    <div class="body">
+      <h2>What is real, what is not yet</h2>
+      <p>I would rather tell you than have you find it.</p>
+      <div class="duo">
+        <div class="col real">
+          <h3>Real today</h3>
+          <ul>
+            <li><b>The honest clock</b> and the live token stream from a local model.</li>
+            <li><b>The full loop</b> — ignite, gather, freeze, crystallize, carry out.</li>
+            <li><b>The shelf</b> that persists your kept waits across sessions.</li>
+          </ul>
+        </div>
+        <div class="col not">
+          <h3>Not yet</h3>
+          <ul>
+            <li><b>Money settlement.</b> Takes no card, moves no funds, on purpose. The value is real and ownable; the rail is the next step.</li>
+            <li><b>Demo mode</b> shows a clearly labelled simulated wait, never dressed up as real inference.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="gut"><span class="num">§05</span><br>Run it</div>
+    <div class="body">
+      <h2>No card · no cloud · one file</h2>
+      <p>Runs on a local model through Ollama. Vanilla WebGL, Canvas, and synthesized Web Audio. Nothing external to fetch. Two terminals.</p>
+      <div class="runcap">// let the browser reach the model</div>
+      <div class="cmd"><span class="p">$ </span>OLLAMA_ORIGINS=* ollama serve</div>
+      <div class="runcap">// serve the void</div>
+      <div class="cmd"><span class="p">$ </span>cd dead-time/app &amp;&amp; python3 -m http.server 8080</div>
+      <p style="margin-top:18px">Open <code>localhost:8080</code>, click once, type a thought, press Enter. First run only: <code>ollama pull llama3.2:1b</code>. Show it without a model with <code>?demo=1</code>. The readout along the bottom is the proof the clock is real. Watch it die when the answer lands.</p>
+    </div>
+  </section>
+
+  <div class="plate-foot">
+    <div class="closer">If the freeze beat lands, you have already won the room.</div>
+    <div class="stamp">Dead Time · built solo<br>power and play · awe and dread<br>danger and reward</div>
+  </div>
+</div>
+
+<script>
+"use strict";
+// Small living void echoing the product: hold to think, release to freeze.
+// A pitch-page demo, not the real inference clock — the real law is stated above.
+(function(){
+  const cv=document.getElementById("void"), ctx=cv.getContext("2d");
+  const reduce=matchMedia("(prefers-reduced-motion: reduce)").matches;
+  let W=0,H=0,DPR=1,CX=0,CY=0;
+  function resize(){
+    DPR=Math.min(devicePixelRatio||1,2);
+    const r=cv.getBoundingClientRect();
+    W=cv.width=Math.max(1,Math.floor(r.width*DPR));
+    H=cv.height=Math.max(1,Math.floor(r.height*DPR));
+    CX=W/2;CY=H/2;
+  }
+  new ResizeObserver(resize).observe(cv); resize();
+
+  const N=reduce?40:70, P=[];
+  function seedParticles(){ P.length=0;
+    for(let i=0;i<N;i++){
+      const a=Math.random()*6.2832, rad=(0.05+Math.random()*0.85)*Math.min(W||600,H||400)*0.5;
+      P.push({hx:CX+Math.cos(a)*rad,hy:CY+Math.sin(a)*rad,x:CX+Math.cos(a)*rad,y:CY+Math.sin(a)*rad,
+        ph:Math.random()*6.2832,sp:0.2+Math.random()*0.6,dir:Math.random()*6.2832,
+        len:6+Math.random()*15,hue:202+Math.random()*30});
+    }
+  }
+  seedParticles();
+  let energy=0,target=0,frozen=0,shock=0,vt=0,gx=CX,gy=CY,holding=false;
+  const efill=document.getElementById("efill"),sw=document.getElementById("stateword"),
+        evl=document.getElementById("eval"),clk=document.getElementById("clk"),
+        livedot=document.getElementById("livedot"),livetxt=document.getElementById("livetxt"),
+        hint=document.getElementById("scopehint");
+  const scope=document.getElementById("scope");
+  function down(e){ holding=true; target=1; const r=cv.getBoundingClientRect();
+    gx=(e.clientX-r.left)*DPR; gy=(e.clientY-r.top)*DPR; hint.style.opacity="0"; }
+  function move(e){ if(!holding)return; const r=cv.getBoundingClientRect();
+    gx=(e.clientX-r.left)*DPR; gy=(e.clientY-r.top)*DPR; }
+  function up(){ if(!holding)return; holding=false; target=0; frozen=1; shock=1; }
+  scope.addEventListener("pointerdown",down);
+  scope.addEventListener("pointermove",move);
+  addEventListener("pointerup",up); addEventListener("pointercancel",up);
+
+  let last=performance.now();
+  function frame(now){
+    const dt=Math.min(0.05,(now-last)/1000); last=now;
+    energy += (target-energy)*(target>energy?0.05:0.045);
+    if(energy<0.001&&target===0)energy=0;
+    frozen*=0.94; if(frozen<0.003)frozen=0;
+    shock*=0.94; if(shock<0.003)shock=0;
+    vt += energy*dt;
+    const e=energy;
+
+    ctx.clearRect(0,0,W,H);
+    ctx.fillStyle="#040405"; ctx.fillRect(0,0,W,H);
+    const R=Math.min(W,H)*(0.16+0.5*e);
+    const g=ctx.createRadialGradient(CX,CY,0,CX,CY,R);
+    g.addColorStop(0,`rgba(${90+70*(1-frozen)},140,210,${0.15+0.20*e})`);
+    g.addColorStop(0.5,`rgba(40,70,120,${0.05+0.09*e})`);
+    g.addColorStop(1,"rgba(4,4,5,0)");
+    ctx.fillStyle=g; ctx.fillRect(0,0,W,H);
+
+    ctx.globalCompositeOperation="lighter";
+    for(const p of P){
+      const n=p.ph+vt*0.5;
+      p.x += Math.cos(n*p.sp)*dt*10*DPR;
+      p.y += Math.sin(n*p.sp*1.2)*dt*10*DPR;
+      const tx=holding?gx:p.hx, ty=holding?gy:p.hy, pull=holding?(0.04+0.08*e):0.02;
+      p.x += (tx-p.x)*pull; p.y += (ty-p.y)*pull;
+      const a=0.09+0.85*e*(frozen?0.7:1); if(a<=0.02)continue;
+      const hue=frozen?210:p.hue, sat=frozen?28:82, dx=Math.cos(p.dir), dy=Math.sin(p.dir);
+      ctx.strokeStyle=`hsla(${hue},${sat}%,74%,${0.13*a})`; ctx.lineWidth=DPR*1.5;
+      ctx.beginPath();
+      for(let i=0;i<=6;i++){const tt=i/6;
+        const cx=p.x+dx*tt*p.len*DPR+Math.cos(n+tt*4)*p.len*tt*0.4*DPR;
+        const cy=p.y+dy*tt*p.len*DPR+Math.sin(n+tt*4)*p.len*tt*0.4*DPR;
+        i?ctx.lineTo(cx,cy):ctx.moveTo(cx,cy);}
+      ctx.stroke();
+      const rr=DPR*5.5, gg=ctx.createRadialGradient(p.x,p.y,0,p.x,p.y,rr);
+      gg.addColorStop(0,`hsla(${hue},${sat+8}%,90%,${0.9*a})`);
+      gg.addColorStop(1,`hsla(${hue},${sat}%,70%,0)`);
+      ctx.fillStyle=gg; ctx.fillRect(p.x-rr,p.y-rr,rr*2,rr*2);
+    }
+    if(shock>0.003){
+      const rr=Math.min(W,H)*(0.05+0.7*(1-shock));
+      ctx.beginPath(); ctx.arc(CX,CY,rr,0,6.2832);
+      ctx.strokeStyle=`rgba(176,206,255,${0.4*shock})`; ctx.lineWidth=DPR*(1.5+6*shock); ctx.stroke();
+    }
+    ctx.globalCompositeOperation="source-over";
+
+    efill.style.right=(100-Math.min(100,e*100))+"%";
+    evl.textContent=e.toFixed(2);
+    const st = holding?"alive":(frozen>0.1?"frozen":"still");
+    sw.textContent=st; sw.style.color = holding?"#9fc6ff":(frozen>0.1?"#e0493d":"#767a80");
+    clk.textContent = e>0.01?"running":"held";
+    const on = holding||frozen>0.1;
+    livedot.classList.toggle("on",on); livetxt.textContent = holding?"thinking":(frozen>0.1?"frozen":"idle");
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
