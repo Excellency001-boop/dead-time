@@ -270,9 +270,11 @@ function buildLinks(){
     if(b>=0 && best<maxD) links.push([i,b]);
   }
 }
+// density curve: fills fast and satisfyingly early, keeps inching richer forever, never walls out
+function massNorm(){ return 1-Math.exp(-coreMass/100); }
 function drawObject(){
   const alive = phase==="thinking", carrying = phase==="carry";
-  const m = Math.min(1, coreMass/OBJECT_FULL);           // density 0..1
+  const m = massNorm();                                  // density 0..1
   const massHue = 208 + m*46;                            // longer waits drift stranger: blue -> violet
   const bright = alive ? Math.min(1, energy) : 0.92;
   let ox=object.x, oy=object.y, sc=1;
@@ -320,7 +322,7 @@ function drawObject(){
 
   // the dense core — THE object. grows with mass, throbs with tokens, solid when frozen.
   if(m>0.001 || phase==="frozen" || carrying){
-    const R=Math.min(W,H)*(0.022+0.09*m)*sc, b2=Math.min(1.2, bright+pulse*0.28);
+    const R=Math.min(W,H)*(0.02+0.085*m)*sc, b2=Math.min(1.2, bright+pulse*0.28);
     const halo=sctx.createRadialGradient(ox,oy,0,ox,oy,R*3.6);
     halo.addColorStop(0,`hsla(${massHue},80%,80%,${0.42*b2*(0.4+0.6*m)})`);
     halo.addColorStop(1,`hsla(${massHue},80%,70%,0)`);
@@ -330,10 +332,16 @@ function drawObject(){
     if(m>0.62){ sctx.strokeStyle=`hsla(${massHue},85%,84%,${0.07*bright})`; sctx.lineWidth=DPR;
       sctx.beginPath(); sctx.arc(ox,oy,R*2.5,0,6.2832); sctx.stroke(); }
     const core=sctx.createRadialGradient(ox,oy,0,ox,oy,R);
-    core.addColorStop(0,`hsla(${massHue},92%,${alive?96:99}%,${Math.min(1,b2)})`);
-    core.addColorStop(0.55,`hsla(${massHue},88%,74%,${(alive?0.55:0.72)*bright})`);   // more solid when frozen
-    core.addColorStop(1,`hsla(${massHue},82%,60%,0)`);
+    core.addColorStop(0,`hsla(${massHue},92%,90%,${Math.min(0.98,b2)})`);   // bright, dense, but keeps its violet (not pure white)
+    core.addColorStop(0.45,`hsla(${massHue},94%,68%,${(alive?0.62:0.78)*bright})`);
+    core.addColorStop(1,`hsla(${massHue},86%,56%,0)`);
     sctx.fillStyle=core; sctx.fillRect(ox-R,oy-R,R*2,R*2);
+    if(alive){                                           // a molten glint that moves while thinking, frozen when it stops
+      const gr=R*0.42, gx=ox+Math.cos(voidTime*1.6)*R*0.34, gy=oy+Math.sin(voidTime*1.6)*R*0.34;
+      const gl2=sctx.createRadialGradient(gx,gy,0,gx,gy,gr);
+      gl2.addColorStop(0,`hsla(${massHue},94%,94%,${0.4*bright})`); gl2.addColorStop(1,`hsla(${massHue},94%,88%,0)`);
+      sctx.fillStyle=gl2; sctx.fillRect(gx-gr,gy-gr,gr*2,gr*2);
+    }
   }
   sctx.globalCompositeOperation="source-over";
 }
@@ -341,7 +349,7 @@ function drawObject(){
 // ════════════════════════════════════════════════════════════════════════════
 //  SOUND — one deep drone that BREATHES with energy, hard cut to silence on freeze
 // ════════════════════════════════════════════════════════════════════════════
-let ac=null, master=null, lp=null, drone=null, sub=null, breathGain=null, massGain=null, lastTick=0;
+let ac=null, master=null, lp=null, drone=null, sub=null, breathGain=null, massGain=null, comp=null, lastTick=0;
 function initAudio(){
   if(ac) return;
   ac=new (window.AudioContext||window.webkitAudioContext)();
@@ -349,7 +357,7 @@ function initAudio(){
   lp=ac.createBiquadFilter(); lp.type="lowpass"; lp.frequency.value=140; lp.Q.value=6;
   sub  =ac.createOscillator(); sub.type="sine";   sub.frequency.value=27.5;   // deep body
   drone=ac.createOscillator(); drone.type="sine"; drone.frequency.value=55;    // the drone
-  const sg=ac.createGain(); sg.gain.value=0.7;
+  const sg=ac.createGain(); sg.gain.value=0.92;   // deep body, present
   sub.connect(sg); sg.connect(lp); drone.connect(lp);
   // breath — filtered noise that opens with energy (the sound of thinking)
   const nb=ac.createBuffer(1, ac.sampleRate*2, ac.sampleRate), nd=nb.getChannelData(0);
@@ -361,7 +369,10 @@ function initAudio(){
   // mass harmonic — a fifth that fills in as the object densifies. denser = richer, stranger.
   const mo=ac.createOscillator(); mo.type="sine"; mo.frequency.value=82.5;
   massGain=ac.createGain(); massGain.gain.value=0; mo.connect(massGain); massGain.connect(lp);
-  lp.connect(master); master.connect(ac.destination);
+  // master glue — a gentle compressor so nothing clips or turns harsh. keeps it expensive.
+  comp=ac.createDynamicsCompressor();
+  comp.threshold.value=-16; comp.knee.value=22; comp.ratio.value=3.2; comp.attack.value=0.004; comp.release.value=0.28;
+  lp.connect(master); master.connect(comp); comp.connect(ac.destination);
   sub.start(); drone.start(); noise.start(); mo.start();
 }
 // a soft low pulse on each token — the object gaining mass, heard. pitch rises as it densifies.
@@ -379,7 +390,7 @@ function igniteSwell(){                 // time turning on
   o.type="sine"; o.frequency.setValueAtTime(60,now); o.frequency.exponentialRampToValueAtTime(280,now+0.5);
   g.gain.setValueAtTime(0,now); g.gain.linearRampToValueAtTime(0.11,now+0.05);
   g.gain.exponentialRampToValueAtTime(0.0001,now+0.85);
-  o.connect(g); g.connect(ac.destination); o.start(now); o.stop(now+0.9);
+  o.connect(g); g.connect(comp); o.start(now); o.stop(now+0.9);
 }
 function freezeImpact(){                // the hard cut: a bright crack + a deep hit, then silence
   if(!ac) return; const now=ac.currentTime;
@@ -387,13 +398,13 @@ function freezeImpact(){                // the hard cut: a bright crack + a deep
   o.type="sine"; o.frequency.setValueAtTime(95,now); o.frequency.exponentialRampToValueAtTime(27,now+0.55);
   g.gain.setValueAtTime(0,now); g.gain.linearRampToValueAtTime(0.55,now+0.006);
   g.gain.exponentialRampToValueAtTime(0.0001,now+0.95);
-  o.connect(g); g.connect(ac.destination); o.start(now); o.stop(now+1);
+  o.connect(g); g.connect(comp); o.start(now); o.stop(now+1);
   const nb=ac.createBuffer(1, (ac.sampleRate*0.14)|0, ac.sampleRate), nd=nb.getChannelData(0);   // sharp crack (the cut)
   for(let i=0;i<nd.length;i++) nd[i]=(Math.random()*2-1)*Math.pow(1-i/nd.length,3);
   const src=ac.createBufferSource(); src.buffer=nb;
-  const hp=ac.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=1400;
-  const ng=ac.createGain(); ng.gain.value=0.13;
-  src.connect(hp); hp.connect(ng); ng.connect(ac.destination); src.start(now);
+  const hp=ac.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=1300;
+  const ng=ac.createGain(); ng.gain.value=0.11;
+  src.connect(hp); hp.connect(ng); ng.connect(comp); src.start(now);
 }
 function carrySound(){                  // the reward: a body rising out of the void, blooming at the top
   if(!ac) return; const now=ac.currentTime;
@@ -401,13 +412,13 @@ function carrySound(){                  // the reward: a body rising out of the 
   o.type="sine"; o.frequency.setValueAtTime(130,now); o.frequency.exponentialRampToValueAtTime(780,now+0.55);
   g.gain.setValueAtTime(0,now); g.gain.linearRampToValueAtTime(0.15,now+0.05);
   g.gain.exponentialRampToValueAtTime(0.0001,now+0.72);
-  o.connect(g); g.connect(ac.destination); o.start(now); o.stop(now+0.78);
+  o.connect(g); g.connect(comp); o.start(now); o.stop(now+0.78);
   const t2=now+0.44;                    // arrival bloom — soft shimmer as it surfaces and settles
   [1,1.5,2.0].forEach((mlt,i)=>{ const s=ac.createOscillator(), sg=ac.createGain();
     s.type="sine"; s.frequency.value=540*mlt;
     sg.gain.setValueAtTime(0,t2); sg.gain.linearRampToValueAtTime(0.05/(i+1),t2+0.04);
     sg.gain.exponentialRampToValueAtTime(0.0001,t2+0.95);
-    s.connect(sg); sg.connect(ac.destination); s.start(t2); s.stop(t2+1); });
+    s.connect(sg); sg.connect(comp); s.start(t2); s.stop(t2+1); });
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -416,7 +427,7 @@ function carrySound(){                  // the reward: a body rising out of the 
 function onToken(){
   energy=Math.min(ENERGY_MAX, energy+ENERGY_PER_TOKEN);   // <── the coupling
   tokenCount++;
-  coreMass=Math.min(OBJECT_FULL, coreMass+1);             // the object densifies
+  coreMass=Math.min(600, coreMass+1);                    // the object densifies (no hard wall)
   pulse=Math.min(1.6, pulse+0.6);                         // a visible throb of accretion
   accretionTick();                                        // and an audible one
   if(tokenCount===1){ ignite=1; igniteSwell(); }          // the first token turns time on
@@ -454,15 +465,21 @@ async function think(text){
   if(streaming) endStream();
 }
 
-// high-quality simulated stream for the public demo (no local model needed)
+// high-quality simulated stream for the public demo (no local model needed).
+// paced like a real model thinking: hesitant open, flowing middle, a pause before the end.
 function simulate(){
-  const total=150+((Math.random()*180)|0); let i=0;
+  const total=180+((Math.random()*120)|0); let i=0;
   (function step(){
     if(!streaming) return;
     if(i>=total){ endStream(); return; }
-    const burst=1+((Math.random()*3)|0);
+    const prog=i/total;
+    const burst = prog<0.12 ? 1 : 1+((Math.random()*3)|0);
     for(let b=0;b<burst && i<total;b++,i++) onToken();
-    const gap = Math.random()<0.07 ? 240+Math.random()*520 : 26+Math.random()*70;  // bursts + thinking pauses
+    let gap;
+    if(prog>0.86 && Math.random()<0.5) gap = 360+Math.random()*520;   // the held breath before the answer lands
+    else if(Math.random()<0.10)        gap = 300+Math.random()*560;   // a real thinking pause
+    else if(prog<0.12)                 gap = 95+Math.random()*150;    // hesitant open
+    else                               gap = 48+Math.random()*95;     // flowing
     setTimeout(step,gap);
   })();
 }
@@ -539,7 +556,7 @@ function renderShelf(animateNewest){
 }
 function rebirth(r){
   if(phase!=="enter") return;
-  seed=r.seed; rng=mulberry32(seed); filaments=[]; tokenCount=r.tokens; coreMass=Math.min(OBJECT_FULL,r.tokens);
+  seed=r.seed; rng=mulberry32(seed); filaments=[]; tokenCount=r.tokens; coreMass=Math.min(600,r.tokens);
   object.x=CX; object.y=CY; object.moving=false;
   for(let i=0;i<Math.min(MAX_FILAMENTS,r.tokens);i++) spawnFilament();
   buildLinks(); phase="frozen"; energy=0; viewingRelic=true;
@@ -588,7 +605,7 @@ function loop(){
     sctx.globalCompositeOperation="source-over"; }
   // freeze blink — a hard white crystallisation flash on the object at the cut
   if(freezeFlash>0.01){ sctx.globalCompositeOperation="lighter";
-    const rr=Math.min(W,H)*(0.06+0.22*(1-freezeFlash))*(0.7+0.5*Math.min(1,coreMass/OBJECT_FULL));
+    const rr=Math.min(W,H)*(0.06+0.22*(1-freezeFlash))*(0.7+0.5*massNorm());
     const g=sctx.createRadialGradient(object.x,object.y,0,object.x,object.y,rr);
     g.addColorStop(0,`rgba(236,244,255,${0.75*freezeFlash})`); g.addColorStop(1,"rgba(236,244,255,0)");
     sctx.fillStyle=g; sctx.fillRect(object.x-rr,object.y-rr,rr*2,rr*2);
@@ -607,7 +624,7 @@ function loop(){
   if(ac){ const t=ac.currentTime, thinking=phase==="thinking";
     master.gain.setTargetAtTime(thinking?Math.min(0.5,energy*0.5):0, t, thinking?0.06:0.02);
     breathGain.gain.setTargetAtTime(thinking?Math.min(0.12,energy*0.12):0, t, thinking?0.08:0.03);
-    massGain.gain.setTargetAtTime(thinking?Math.min(0.13,(coreMass/OBJECT_FULL)*0.14*Math.max(0.35,energy)):0, t, 0.15);
+    massGain.gain.setTargetAtTime(thinking?Math.min(0.13,massNorm()*0.14*Math.max(0.35,energy)):0, t, 0.15);
     lp.frequency.setTargetAtTime(110+energy*1200, t, 0.05);
     drone.frequency.setTargetAtTime(52+energy*8, t, 0.1);
   }
@@ -625,6 +642,12 @@ function setErr(t){ errEl.textContent=t; errEl.style.color = t? "rgba(230,120,11
 let armed=false;
 function arm(){ if(armed) return; armed=true; initAudio(); if(ac.state==="suspended") ac.resume(); }
 
+// touch has no keyboard for the ritual, so a tap releases an evocative thought into the dark
+const TOUCH = matchMedia("(pointer: coarse)").matches;
+const THOUGHTS = ["describe the dark that is thinking right now","what is on the other side of this wait",
+  "name a colour that has never been seen","the ocean at night, in a single breath","what does silence look like"];
+function randomThought(){ return THOUGHTS[(Math.random()*THOUGHTS.length)|0]; }
+
 addEventListener("keydown",e=>{
   if(phase==="enter"){
     arm();
@@ -639,12 +662,15 @@ addEventListener("keydown",e=>{
 function setGather(x,y){ gather.x=x*DPR; gather.y=y*DPR; }
 addEventListener("pointermove",e=>setGather(e.clientX,e.clientY));
 addEventListener("pointerdown",e=>{ arm(); setGather(e.clientX,e.clientY);
-  if(phase==="frozen") carryOut(); else gather.active=true; });
+  if(phase==="enter"){ if(TOUCH){ showRitual(false); think(randomThought()); } }
+  else if(phase==="frozen") carryOut();
+  else gather.active=true; });
 addEventListener("pointerup",()=>{ gather.active=false; });
 
 // ── boot ──
 resize();
 if(!initGL()) setErr("this void needs webgl");
+if(TOUCH) document.getElementById("sub").textContent="tap to release a thought into the dark";
 renderShelf();
 gather.x=CX; gather.y=CY; object.x=CX; object.y=CY;
 requestAnimationFrame(loop);
